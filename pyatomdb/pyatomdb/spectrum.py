@@ -3981,7 +3981,8 @@ class NEISession(CIESession):
     return ret
 
   def return_spectrum(self,  Te, tau, init_pop='ionizing', teunit='keV', nearest=False,\
-                      log_interp=True, freeze_ion_pop=False):
+                      log_interp=True, freeze_ion_pop=False,\
+                      dolines=True, docont=True, dopseudo=True):
     """
     Get the spectrum at an exact temperature.
     Interpolates between 2 neighbouring spectra
@@ -4011,6 +4012,12 @@ class NEISession(CIESession):
       Perform linear interpolation on a logT/logEpsilon grid (default), or linear.
     freeze_ion_pop : bool
       If True, skip the ion population calculation, use init_pop as the final pop instead.
+    dolines : bool
+      Calculate line emission (default True)
+    docont : bool
+      Calculate Continuum emission (default True)
+    dopseudo : bool
+      Calculate PseudoContinuum (weak line) emission (default True)
 
     Returns
     -------
@@ -4039,7 +4046,8 @@ class NEISession(CIESession):
                                     nearest = nearest,elements = el_list, \
                                     abundance=ab, log_interp=True,\
                                     broaden_object=self.cdf, \
-                                    freeze_ion_pop = freeze_ion_pop)
+                                    freeze_ion_pop = freeze_ion_pop, dolines=dolines,\
+                                    dopseudo=dopseudo, docont=docont)
 
     ss = self._apply_response(s)
 
@@ -4212,7 +4220,8 @@ class _NEISpectrum(_CIESpectrum):
 
   def return_spectrum(self, Te, tau, init_pop='ionizing', teunit='keV', nearest = False,
                              elements=False, abundance=False, log_interp=True, broaden_object=False,\
-                             freeze_ion_pop = False):
+                             freeze_ion_pop = False,\
+                             dolines=True, docont=True, dopseudo=True):
 
     """
     Return the spectrum of the element on the energy bins in
@@ -4246,7 +4255,12 @@ class _NEISpectrum(_CIESpectrum):
       Object with routine "broaden" which applies line broadening. Usually a Gaussian.
     freeze_ion_pop : bool
       If True, skip the ion population calculation, use init_pop as the final pop instead.
-
+    dolines : bool
+      Calculate line emission (default True)
+    docont : bool
+      Calculate Continuum emission (default True)
+    dopseudo : bool
+      Calculate PseudoContinuum (weak line) emission (default True)
     Returns
     -------
     spec : array(float)
@@ -4315,7 +4329,10 @@ class _NEISpectrum(_CIESpectrum):
                                   thermal_broadening = self.thermal_broadening,\
                                   broaden_limit = epslimit,\
                                   velocity_broadening = self.velocity_broadening,\
-                                  broaden_object=broaden_object) *\
+                                  broaden_object=broaden_object,\
+                                  dolines=dolines,\
+                                  docont=docont,\
+                                  dopseudo=dopseudo) *\
                                   ionfrac[z1-1]
 
 
@@ -5578,6 +5595,1173 @@ class _PShockSpectrum(_NEISpectrum):
           linelist = numpy.append(linelist, linelisttmp)
 
     return linelist
+
+
+
+
+
+
+class ACXSession(NEISession):
+  """
+  This is the overarching model. Within it, it will load an
+  ACXDonorModel for each donor atom/molecule. In theory, you should
+  be able to load this in XSPEC and be done with it.
+
+  PARAMETERS
+  ----------
+  None
+
+  ATTRIBUTES
+  ----------
+  DonorList : list of ACXDonorModel
+    List of donors, (e.g. H, He, H2...). Add to this list using add_donor
+  ebins : ndarray(float)
+    Energy bin edges for the resulting spectra
+  ebins_checksum : md5sum
+    The md5 hash of the energy bins. Stored to easily catch changes
+  temperature : float
+    The temperature in keV
+
+  NOTES
+  -----
+  Once initialized, call "add_donor" to add donor elements.
+
+  Provide energy bins using set_ebins, temperature with set_temperature
+
+  Then call calc_spectrum to return total spectrum.
+  """
+
+  def __init__(self, linefiles=["$ATOMDB/acx2_H_v1_line.fits",\
+                                "$ATOMDB/acx2_He_v1_line.fits"],\
+                     cocofiles=["$ATOMDB/acx2_H_v1_cont.fits",\
+                                "$ATOMDB/acx2_He_v1_cont.fits"],\
+                     sigmafiles=["$ATOMDB/acx2_H_v1_sigma.fits",\
+                                "$ATOMDB/acx2_He_v1_sigma.fits"],\
+                     donors=['H','He'],\
+                     elements=False, abundset='AG89'):
+    """
+    Initialization routine. Can set the line and continuum files here
+
+    Input
+    -----
+    linefile : str or HDUList
+      The filename of the line emissivity data, or the opened file.
+    cocofile : str or HDUList
+      The filename of the continuum emissivity data, or the opened file.
+    elements : iterable of int
+      Elements to include, listed by atomic number. if not set, include all.
+    abundset : string
+      The abundance set to use. Defaults to AG89. See atomdb.set_abundance
+      for list of options.
+    """
+
+    self.SessionType='ACX'
+
+    self._session_initialise1(linefile, cocofile, donors, elements, abundset)
+
+    self.DonorList=[]
+    for i in range(len(self.linedata)):
+      self.add_donor(_ACXDonor(self.linedata, self.cocodata, self.sigmadata, donors))
+
+
+    self._session_initialise2()
+
+
+    # ACX specific setup
+    self.recombtype = SINGLE_RECOMBINATION
+
+
+    """
+    Initialize the ACX Model
+    """
+    print('AtomDB ACX version 2 model. Based on CX cross section data from the Kronos Database')
+    print('See references:')
+    print('  Mullen, P. D., et al. ApJS 224, 31 (2016)')
+    print('  Mullen, P. D., et al. ApJ 844, 7 (2017)')
+    print('  Cumbee, R. S., et al. ApJ 852, 7 (2018)')
+
+
+
+
+#    self.DonorList = []
+#    self.ebins = False
+#    self.ebins_checksum = False
+#    self.temperature = False
+#    self.ebins_set = False
+#    self.temperature_set = False
+#    self.collision_set = False
+#    self.recombtype = SINGLE_RECOMBINATION
+
+#    self.abund = {}
+#    for Z in range(1,31):
+#      self.abund[Z] = 1.0
+
+
+
+
+
+  def _session_initialise1(self, linefiles, cocofiles, sigmafiles, donors, elements, abundset):
+    """
+    This routine does all the initialization which is the same for all
+    the different session classes, separates them out from the
+    instance specific ones
+
+    Parameters
+    ----------
+    linefiles : str or HDULists
+      The filenames of the line emissivity data, or the file opened with pyfits.
+    cocofile : str or HDUList
+      The filename of the continuum emissivity data, or the file opened with pyfits.
+    elements : iterable of int
+      Elements to include, listed by atomic number. if not set, include all.
+    abundset : string
+      The abundance set to use. Defaults to AG89. See atomdb.set_abundance
+      for list of options.
+
+    Returns
+    -------
+    None
+    """
+    self.datacache={}
+
+    # Open up the APEC files
+
+    self._set_apec_files(linefile, cocofile)
+
+    # if elements are specified, use them. Otherwise, use Z=1-30
+    if util.keyword_check(elements):
+      self.elements = elements
+    else:
+      if self.SessionType=='CIE':
+        self.elements=list(range(1,const.MAXZ_CIE+1))
+      elif self.SessionType in ['NEI','ACX']:
+        self.elements=list(range(1,const.MAXZ_NEI+1))
+
+
+    # Set both the current and the default abundances to those that
+    # the apec data was calculated on
+    self.abundset=self.linedata[0].header['SABUND_SOURCE']
+    self.default_abundset=self.linedata[0].header['SABUND_SOURCE']
+
+    self.abundsetvector = numpy.zeros(const.MAXZ_CIE+1)
+    for Z in self.elements:
+      self.abundsetvector[Z] = 1.0
+
+    #  but if another vector was already specified, use this instead
+    if util.keyword_check(abundset):
+      self.set_abundset(abundset)
+
+    self.abund = numpy.zeros(const.MAXZ_CIE+1)
+
+    for Z in self.elements:
+      self.abund[Z]=1.0
+
+    # Set a range of parameters which can be overwritten later
+    self.response_set = False # have we loaded a response file?
+    self.dolines=True # Include lines in spectrum
+    self.docont=True # Include continuum in spectrum
+    self.dopseudo=True # Include pseudo continuum in spectrum
+
+    # no response set yet
+    self.rmffile=False
+    self.arffile=False
+    self.raw_response=False
+
+    self.donors=donors
+
+  def _set_apec_files(self, linefiles, cocofiles, sigmafiles):
+    """
+    Set the apec line and coco files, and load up their data
+
+    Parameters
+    ----------
+    linefile : str or HDUList
+      The filename of the line emissivity data, or the opened file.
+    cocofile : str or HDUList
+      The filename of the continuum emissivity data, or the opened file.
+
+    Returns
+    -------
+    None
+
+    Notes
+    -----
+    Updates self.linefile, self.linedata, self.cocofile and self.cocodata
+    """
+    if len(linefiles) != len(cocofiles):
+      raise util.OptionError("Length of linefiles and cocofiles should be the same")
+    if len(linefiles) != len(sigmafiles):
+      raise util.OptionError("Length of linefiles and sigmafiles should be the same")
+    if len(linefiles) != len(donors):
+      raise util.OptionError("Length of linefiles and donors should be the same")
+
+    self.linedata=[]
+    self.linefile=[]
+    self.cocodata=[]
+    self.cocofile=[]
+    self.sigmadata=[]
+    self.sigmafile=[]
+
+    for i in range(len(linefiles)):
+      linefile = linefiles[i]
+      cocofile = cocofiles[i]
+      sigmafile = sigmafiles[i]
+
+
+      if isinstance(linefile, str):
+        lfile = os.path.expandvars(linefile)
+        if not os.path.isfile(lfile):
+          print("*** ERROR: no such file %s. Exiting ***" %(lfile))
+          return -1
+        self.linedata.append(pyfits.open(lfile))
+        self.linefile.append(lfile)
+
+      elif isinstance(linefile, pyfits.hdu.hdulist.HDUList):
+        # no need to do anything, file is already open
+        self.linedata.append(linefile)
+        self.linefile.append(linefile.filename())
+
+      else:
+        print("Unknown data type for linefile. Please pass a string or an HDUList")
+
+
+      if isinstance(cocofile, str):
+
+        cfile = os.path.expandvars(cocofile)
+        if not os.path.isfile(cfile):
+          print("*** ERROR: no such file %s. Exiting ***" %(cfile))
+          return -1
+        self.cocodata.append(pyfits.open(cfile))
+        self.cocofile.append(cfile)
+
+      elif isinstance(cocofile, pyfits.hdu.hdulist.HDUList):
+        # no need to do anything, file is already open
+        self.cocodata.append(cocofile)
+        self.cocofile.append(cocofile.filename())
+
+      else:
+        print("Unknown data type for cocofile. Please pass a string or an HDUList")
+
+      if isinstance(sigmafile, str):
+
+        cfile = os.path.expandvars(sigmafile)
+        if not os.path.isfile(cfile):
+          print("*** ERROR: no such file %s. Exiting ***" %(cfile))
+          return -1
+        self.sigmadata.append(pyfits.open(cfile))
+        self.sigmafile.append(cfile)
+
+      elif isinstance(sigmafile, pyfits.hdu.hdulist.HDUList):
+        # no need to do anything, file is already open
+        self.sigmadata.append(sigmafile)
+        self.sigmafile.append(sigmafile.filename())
+
+      else:
+        print("Unknown data type for sigmafile. Please pass a string or an HDUList")
+
+
+
+
+
+  def add_donor(self, donor, \
+                donor_linefile, \
+                donor_contfile, \
+                donor_crosssectionfile,\
+                abundset='AG89',\
+                elements=list(range(1,31))):
+    """
+    Add a donor to the ACX model (e.g. H$^{0+}$, He$^{0+}$)
+
+    PARAMETERS
+    ----------
+    donor : str
+      The donor symbol
+    donor_linefile : str
+      The file with the donor line emision
+    donor_contfile : str
+      The file with the donor continuum emision
+    donor_crosssectionfile : str
+      The cross section file for donor
+    abundset : str
+      The abundance set to use
+    elements : list[int]
+      The nuclear charge of the elements to recombine with.
+
+    RETURNS
+    -------
+    None
+
+    NOTES
+    -----
+    Sets parameters in self.DonorList
+    """
+
+    self.DonorList.append(ACXDonorModel(donor, donor_linefile,\
+                                        donor_contfile,\
+                                        donor_crosssectionfile,\
+                                        abundset=abundset,\
+                                        elements=elements))
+    if self.ebins_set:
+      self.DonorList[-1].set_ebins(ebins)
+
+    if self.temperature_set:
+      self.DonorList[-1].set_temperature(self.temperature)
+
+    if self.collision_set:
+      self.DonorList[-1].set_collision(self.colltype, self.collunits)
+
+
+  def set_acxmodel(self, acxmodel):
+    """
+    Set the ACX spectrum type
+
+    PARAMETERS
+    ----------
+    acxmodel : int
+      The acxmodel (between 1 and 8)
+
+    """
+    self.acxmodel=acxmodel
+
+    for donor in self.DonorList:
+      donor.set_acxmodel(self.acxmodel)
+
+
+  def set_recombtype(self, recombtype):
+    """
+    Set the ACX spectrum type
+
+    PARAMETERS
+    ----------
+    acxmodel : int
+      The acxmodel (between 1 and 8)
+
+    """
+    self.recombtype = recombtype
+
+    for donor in self.DonorList:
+      donor.set_recombtype(self.recombtype)
+
+
+  # now set some spectral goodies
+  def set_ebins(self, ebins):
+    """
+    Set the energy bins, also in each donor model
+
+    PARAMETERS
+    ----------
+    ebins : array(float)
+      The energy bins in keV for the spectrum
+
+    RETURNS
+    -------
+    None
+    """
+
+    self.ebins = ebins
+    self.ebins_checksum = hashlib.md5(ebins).hexdigest()
+    self.ebins_set = True
+    for donor in self.DonorList:
+      donor.set_ebins(ebins)
+
+
+
+
+  def set_temperature(self, temperature, teunits='keV'):
+    """
+    Set the ionization temperature for the data
+
+    PARAMETERS
+    ----------
+    temperature : float
+      The electron temperature
+    teunits : str (K or keV)
+      The electron temperature units
+
+    RETURNS
+    -------
+    None
+
+    """
+    if teunits.lower() == 'k':
+      self.temperature = temperature*pyatomdb.const.KBOLTZ
+    elif teunits.lower() == 'kev':
+      self.temperature = temperature
+    else:
+      print("Error, unknown temperature units in set_temperature")
+      return
+
+    self.temperature_set=True
+
+    for donor in self.DonorList:
+      if donor.temperature != self.temperature:
+        # need to redefine
+        donor.set_temperature(self.temperature)
+
+
+
+  def set_ionfrac(self, ionfrac):
+    """
+    Recalculate the ionization balance based on equilibrium electron temperature
+
+    PARAMETERS
+    ----------
+    ionfrac: dict of arrays
+      ionization fraction, e.g. ionfrac[8]=numpy.array([0.0, 0.0, 0.0, 0.0, 0.1, 0.3, 0.4, 0.2, 0.0])
+
+    RETURNS
+    -------
+    None
+
+    """
+
+    # set the numbersset_collisionparam
+    self.ionfrac_from_temperature = False
+    self.temperature = False
+    self.ionfrac = ionfrac
+
+    # calculate ionization balance
+    for donor in self.DonorList:
+      donor.set_ionfrac(ionfrac)
+
+
+  def set_donorabund(self, donorlist, abundlist):
+    """
+    Set the abundance of each donor (in DonorList[i].donor)
+
+    PARAMETERS
+    ----------
+    donorlist : string or iterable of string
+      donor symbols (e.g. H, He, H2O). Case insensitive.
+    abundlist : float or array of float
+      abundance of each.
+
+    RETURNS
+    -------
+    None
+    """
+
+
+    try:
+      _ = (d for d in donorlist)
+    except TypeError:
+      donorlist = [donorlist]
+      abundlist = [abundlist]
+
+    for i in range(len(donorlist)):
+      donorlist[i] = donorlist[i].lower()
+
+
+    for donor in self.DonorList:
+      try:
+
+        i = donorlist.index(donor.donor.lower())
+        donor.set_donorabund(abundlist[i])
+      except ValueError:
+        print("no match for %s"%(donor.donor.lower()))
+        pass
+
+
+
+  def set_collisiontype(self, colltype, collunits):
+    """
+    Set the collision interaction frame of reference and values
+
+    PARAMETERS
+    ----------
+    colltype: int {1,2,3,4}
+      1 - energy of center of mass
+      2 - velocity of center of mass
+      3 - velocity of donor ion
+      4 - velocity of recombining ion
+    collunits : string {'cm/s', 'km/s', 'kev/amu','kev/u', 'ev/amu','ev/u'}
+      The units of collvalue (case insensitive)
+    """
+#    print("Collunits", collunits)
+    self.collisionunits=collunits
+    self.collisiontype=colltype
+    self.collisionset=True
+    for donor in self.DonorList:
+      donor.set_collisiontype(colltype, collunits=collunits)
+
+  def return_spectrum(self, collvalue):
+    """
+    Calculate the spectrum for all the donors, sum.
+
+    PARAMETERS
+    ----------
+    collvalue : float
+      The collision parameter (kev/u or cm/s, depending) to calculate the spectrum
+
+    RETURNS
+    -------
+    ret : array(float)
+      The spectrum, in ph cm^3 s-1 bin-1
+    """
+    retset=False
+
+    if DEBUG:
+      ret = []
+      for donor in self.DonorList:
+        ret.append(donor.return_spectrum(collvalue))
+
+      return ret
+    else:
+      ret=False
+      for donor in self.DonorList:
+
+        if retset==True:
+          ret += donor.return_spectrum(collvalue)*donor.donorAbund
+        else:
+          ret = donor.return_spectrum(collvalue)*donor.donorAbund
+          retset=True
+
+      return ret
+
+
+  def set_abund(self, abund, elements=None):
+    """
+    Set the energy bins, also in each donor model
+
+    PARAMETERS
+    ----------
+    abund : array(float)
+      Abundances, relative to defulat
+
+    RETURNS
+    -------
+    None
+    """
+
+    try:
+      if elements==None:
+        elements = self.elements
+      else:
+        elements, elissvec = util.make_vec(elements)
+    except ValueError:
+      elements, elissvec = util.make_vec(elements)
+
+    abundvec, aisvec = util.make_vec(abund)
+
+    if len(abundvec) != len(elements):
+      if len(abundvec)==1:
+        abundvec = abundvec[0]*numpy.ones(len(elements))
+
+      else:
+        raise(ValueError,"Error: specified incompatible number of elements from set_abund")
+        return
+
+    for i in range(len(abundvec)):
+      self.abund[elements[i]] = abundvec[i]
+
+    for donor in self.DonorList:
+      donor.set_abund(abundvec, elements=elements)
+
+
+
+
+
+class ACXDonorModel():
+  """
+  A model of the ACX Donor
+
+  PARAMETERS
+  ----------
+  donor : string
+    The donor symbol (e.g. "H")
+  donor_linefile : string
+    The file with the donor line emision
+  donor_contfile : string
+    The file with the donor continuum emision
+  donor_crosssectionfile : string
+    The cross section file for donor
+  abundset : optional, {"AG89"}
+    The abundance set. Only AG89 works currently
+  elements : optional, array-like int
+    The recombining element atomic numbers. Default is all.
+  acxmodel : optional, int, default=8
+    The acx model l, n distribution to fall back on.
+
+  ATTRIBUTES
+  ----------
+  linedata : HDUList
+    The data in the donor_linefile
+  contdata : HDUList
+    The data in the donor_contfile
+  crosssectiondata : HDUList
+    The data in the donor_crosssectionfile
+  donorAbundance : float
+    The donor abundance. Defaults to 1.0. Intended for correctly mixing
+    donors, e.g. in 10%He, 90%H donor plasma, set to 0.1 and 0.9 respectively,
+    though no normalization is  checked for.
+  donormass : float
+    mass of the donor in a.m.u.
+  abund : dict of float
+    abundance of each element, relative to abundset. e.g. abund[6] = 2.0 means 2x solar C
+  ionfrac_from_temperature : bool
+    was the ionfracance calculated from the temperature
+  temperature : float
+    the temperature in keV
+  ionfrac : dict of arrays of float
+    the ionization fraction, normalized to 1 for each element,
+    e.g. ionfrac[2] = ndarray([0.01,0.1,0.89])
+
+
+  """
+  import pyatomdb, numpy, os, hashlib
+
+  def __init__(self, donor, \
+               donor_linefile, \
+               donor_contfile, \
+               donor_crosssectionfile,\
+               abundset='AG89',\
+               elements=list(range(1,31)),\
+               acxmodel = 8, \
+               recombtype = SINGLE_RECOMBINATION,\
+               collisiontype = 1):
+
+
+    self.donor = donor.lower() # store in lower case
+    self.donor_linefile = os.path.expandvars(donor_linefile)
+    self.donor_contfile = os.path.expandvars(donor_contfile)
+    self.donor_crosssectionfile = os.path.expandvars(donor_crosssectionfile)
+#    input('DON1')
+    try:
+      self.linedata = pyatomdb.pyfits.open(self.donor_linefile)
+    except:
+      print("Cannot open line data file %s"%(self.linedata))
+      raise
+
+    try:
+      self.contdata = pyatomdb.pyfits.open(self.donor_contfile)
+    except:
+      print("Cannot open continuum data file %s"%(self.contdata))
+      raise
+
+    try:
+      self.crosssectiondata = pyatomdb.pyfits.open(self.donor_crosssectionfile)
+      self.donormass = self.crosssectiondata[1].header['DonMass']
+
+    except:
+      print("Cannot open cross section data file %s"%(self.crosssectiondata))
+      raise
+
+    # create a structure for the spectral data
+    self.spectra = {}
+
+    # set the default abundance of the donor to 1.0
+    self.set_donorabund(1.0)
+
+
+    # create an abundance vecotr
+
+    self.abundset=abundset
+    self.default_abundset=abundset
+#    input('DON2')
+
+
+    # if elements are specified, use them. Otherwise, use Z=1-30
+    if pyatomdb.util.keyword_check(elements):
+      self.elements = elements
+    else:
+      self.elements=list(range(1,31))
+
+    # set the abundances:
+    #   (1) the initial vector is whatever set AtomDB was calculated on,
+    #       and is therefore 1.0
+#    input('DON2.1')
+
+    self.abundsetvector = {}
+    for Z in self.elements:
+      self.abundsetvector[Z] = 1.0
+#    input('DON2.2')
+
+    #   (2) but if another vector was already specified, use this instead
+    if pyatomdb.util.keyword_check(abundset):
+      self.set_abundset(abundset)
+#    input('DON2.3')
+
+    self.abund = {}
+    for Z in self.elements:
+      self.abund[Z]=1.0
+#    input('DON2.4')
+
+    # set up the default structure for the ionization fraction
+    self.ionfrac = {}
+    for Z in self.elements:
+      self.ionfrac[Z]=numpy.zeros(Z+1, dtype=float)
+      # default to everything fully stripped
+      self.ionfrac[Z][Z] = 1.0
+#    input('DON3')
+
+    self.ionfrac_from_temperature = False
+    self.temperature = False
+
+    self.acxmodel= acxmodel
+
+    self.set_collisiontype(collisiontype)
+
+    # temporary things
+    self.datacache={}
+
+    self.ebins = 0.0
+    self.ebins_checksum = ''
+
+    self.recombtype = recombtype
+
+
+  def set_donorabund(self, abund):
+    """
+    Set the donor abundance
+
+    PARAMETERS
+    ----------
+    abund : float
+      The abundance of the donor.
+
+    """
+    self.donorAbund = abund
+
+
+  def set_abundset(self, abundstring):
+    """
+    Set the abundance set.
+
+    Parameters
+    ----------
+    abundstring : string
+      The abundance string (e.g. "AG89", "uniform"). Case insensitive.
+      See atomdb.get_abundance for list of possible abundances
+
+    Returns
+    -------
+    none
+      updates self.abundset and self.abundsetvector.
+    """
+    # read in the abundance the raw data was calculated on
+    old = pyatomdb.atomdb.get_abundance(abundset=self.default_abundset)
+
+
+    # read in the new abundance
+    new = pyatomdb.atomdb.get_abundance(abundset=abundstring)
+
+
+    # divide the 2, store the replacement ratio to self.abundsetvector
+    for Z in list(self.abundsetvector.keys()):
+      self.abundsetvector[Z]=new[Z]/old[Z]
+
+
+    # update the current abundance string to represent your input
+    self.abundset=abundstring
+
+
+
+  def find_crosssection_type(self, Z, z1):
+    """
+    Find the cross section type, to assign correct CXIonSpectrum type
+
+    PARAMETERS
+    ----------
+    Z : int
+      element charge
+    z1 : int
+      recombining ion charge +1.
+
+    RETURNS
+    -------
+    resolution : string
+      The coupling, currently N, NLS or ACX1 (returned in upper case)
+    ihdu : int
+      The HDU with the cross section data for the ion. Set to -1 for none.
+    """
+
+    ihdu = numpy.where( (self.crosssectiondata['INDEX'].data['Z']==Z) &\
+                        (self.crosssectiondata['INDEX'].data['z1']==z1))[0]
+
+
+    if len(ihdu) == 1:
+      ihdu = ihdu[0]
+      try:
+        resolution = self.crosssectiondata['INDEX'].data['resn'][ihdu]
+      except:
+        resolution = self.crosssectiondata['INDEX'].data['resn'][ihdu].decode('ascii')
+
+#      self.crosssectiondata = crosssectiondata[ihdu+2].data
+#      self.coupling = crosssectiondata['INDEX'].data['resn'][i].decode('ascii')
+#      self.DonorMass = crosssectiondata[ihdu+2].header['DONMASS']
+#      self.RecvMass = crosssectiondata[ihdu+2].header['RECMASS']
+
+    else:
+      ihdu = -1
+      resolution = 'ACX1'
+#      self.RecvMass=pyatomdb.atomic.Z_to_mass(self.Z)
+#      self.DonorMass=crosssectiondata['INDEX'].header['DONMASS']
+    if DEBUG:
+      print("crosssectiondata type = %s, hdu = %i"%(resolution, ihdu))
+    return resolution.upper(), ihdu
+
+
+  def set_collisiontype(self, colltype, collunits='default'):
+    """
+    Set the collision type and units
+
+    PARAMETERS
+    ----------
+    colltype : int
+      Parameter for provided collision type
+      Collision type - 1=energy/mass of center of mass
+      Collision type - 2=velocity of center of mass
+      Collision type - 3=velocity of donor
+      Collision type - 4=velocity of receiver
+
+    collunits : string, optional
+      Units of collision paramter. Defaults to "kev/u" for colltype=1, "cm/s" for others
+
+
+    RETURNS
+    -------
+    None
+    """
+    print("HELLO", colltype)
+    if colltype == 1:
+      if collunits == 'default':
+        self.collisiontype = 1
+        self.collisionunits = 'kev/u'
+      else:
+        if collunits.lower() in ['kev/amu','kev/u','ev/u','ev/amu']:
+          self.collisiontype = 1
+          self.collisionunits = collunits.lower()
+        else:
+          print("Error: unknown units %s for center of mass collision energy")
+
+    elif colltype in [2,3,4]:
+      if collunits == 'default':
+        self.collisiontype = colltype
+        self.collisionunits = 'cm/s'
+      else:
+        if collunits.lower() in ['cm/s']:
+          self.collisiontype = colltype
+          self.collisionunits = collunits.lower()
+        elif collunits.lower() in ['km/s']:
+          self.collisiontype = colltype
+          self.collisionunits = collunits.lower()
+        else:
+          print("Error: unknown units %s for center of mass collision energy")
+
+    else:
+      print("Error: unknown collision type: ", colltype,", should be 1, 2, 3 or 4")
+
+  def set_collisionparam(self, collisionparam):
+    """
+    Set the collision velocity or energy
+
+    PARAMETERS
+    ----------
+    collisionparam : float
+      The collision velocity or energy. Units and parameter type are set in ACXModel.set_collisiontype
+
+    RETURNS
+    -------
+    None
+    """
+
+    # to store the center of mass parameters
+    self.collenergy={} # C.o.M. energies in kev/u
+    self.collvelocity={} # C.o.M. velocities in cm/s
+
+    for Z in self.elements:
+      if self.collisiontype==1: # Energy of center of mass provided
+        if self.collisionunits.lower() in ['kev/amu', 'kev/u']:
+          self.collenergy[Z] = collisionparam*1.0
+          self.collvelocity[Z] = 1e5* numpy.sqrt(4786031.3*self.collenergy[Z]/25.)
+        elif self.collisionunits.lower() in ['ev/u', 'ev/amu']:
+          self.collenergy[Z] = collisionparam/1000.0
+          self.collvelocity[Z] = 1e5* numpy.sqrt(4786031.3*self.collenergy[Z]/25.)
+        else:
+          print("set_collisionparam: unknown collision units %s"%(self.collisionunits))
+          return
+
+      elif self.collisiontype==2:
+        if self.collisionunits.lower() == 'cm/s':
+          # this is the reduced mass velocity
+          self.collvelocity[Z] = collisionparam*1.0
+        elif self.collisionunits.lower() == 'km/s':
+          self.collvelocity[Z] = collisionparam*1e5
+        self.collenergy[Z] = (25/4786031.3) * (self.collvelocity[Z]/1e5)**2
+
+      elif self.collisiontype == 3:
+          # donor ion is moving
+        if self.collisionunits.lower() == 'cm/s':
+          self.collvelocity[Z] = self.donormass*collisionparam/(self.donormass+pyatomdb.atomic.Z_to_mass(Z))
+        elif self.collisionunits.lower() == 'km/s':
+          self.collvelocity[Z] = 1e5*self.donormass*collisionparam/(self.donormass+pyatomdb.atomic.Z_to_mass(Z))
+        self.collenergy[Z] = 25 * (self.collvelocity[Z]/1e5)**2/4786031.3
+
+      elif self.collisiontype == 4:
+          # receiver ion is moving
+        if self.collisionunits.lower() == 'cm/s':
+          self.collvelocity[Z] = pyatomdb.atomic.Z_to_mass(Z)*collisionparam/(self.donormass+pyatomdb.atomic.Z_to_mass(Z))
+        elif self.collisionunits.lower() == 'km/s':
+          self.collvelocity[Z] = 1e5*pyatomdb.atomic.Z_to_mass(Z)*collisionparam/(self.donormass+pyatomdb.atomic.Z_to_mass(Z))
+        self.collenergy[Z] = 25 * (self.collvelocity[Z]/1e5)**2/4786031.3
+
+      else:
+        print("*** ERROR: Unknown collision unit %s: should be kev/amu, km/s or  cm/s ***" %(self.collisionunits))
+        return
+
+
+  def set_ebins(self, ebins, ebins_checksum = False):
+    """
+    Set the energy bins for the spectrum being returned.
+
+    PARAMETERS
+    ----------
+    ebins : array(float)
+      Energy bin edges (keV)
+    ebins_checksum : string, optional
+      The hex digest of the md5 sum of ebins. Used to check for changes.
+    """
+
+    if ebins_checksum == False:
+      ebins_checksum = hashlib.md5(ebins).hexdigest()
+
+    self.ebins = ebins
+
+    if ebins_checksum != self.ebins_checksum:
+#      print("setting ebins")
+      self.ebins_checksum = ebins_checksum
+      for Z in self.spectra.keys():
+        for z1 in self.spectra[Z].keys():
+
+
+          self.spectra[Z][z1].set_ebins(self.ebins, ebins_checksum=self.ebins_checksum)
+
+
+  def return_spectrum(self, collparam):
+    """
+    Calculate the spectrum we want
+
+    PARAMETERS
+    ----------
+
+    collparam : float
+      Collision energy, or velocity, as determined by set_collisiontype, in kev/u,  cm/s or km/s
+
+    RETURNS
+    -------
+    self.emiss : array(float)
+      The emissivity in photons cm^3 bin-1 s-1
+    """
+
+    # get the velocity etc
+    self.set_collisionparam(collparam)
+
+
+    # set up return array for spectrum
+    if DEBUG:
+      self.emiss_debug = {}
+    self.emiss = numpy.zeros(len(self.ebins)-1, dtype=float)
+
+
+    for Z in self.elements:
+      if self.abund[Z] > 0.0:
+        if not Z in self.spectra.keys():
+          self.spectra[Z]={}
+        for z1 in range(2, Z+2):# z1 here is the recombin*ing* ion charge +1
+          if self.recombtype == const.SINGLE_RECOMBINATION:
+            ionf = self.ionfrac[Z][z1-1]
+          elif self.recombtype == const.FULL_RECOMBINATION:
+            ionf = sum(self.ionfrac[Z][z1-1:])
+          else:
+            raise ValueError("Invalid recombtype ", self.recombtype)
+          if self.abund[Z]*ionf > 1e-10: #ionfrac is indexed from 0, not 1
+#            print("Z=%i, z1=%i"%(Z, z1))
+
+
+            if not z1 in self.spectra[Z].keys():
+              # Initialize new CXIonSpectrum object for this ion
+              resolution, ihdu = self.find_crosssection_type(Z,z1)
+
+              if resolution=='ACX1':
+                self.spectra[Z][z1] = CXIonSpectrum_ACX1(Z,z1,ihdu, \
+                  self.linedata, self.contdata,\
+                  acxmodel = self.acxmodel,\
+                  donor = self.donor,\
+                  receivermass = pyatomdb.atomic.Z_to_mass(Z),\
+                  donormass = self.crosssectiondata['INDEX'].header['DONMASS'])
+
+
+              elif resolution=='N':
+                self.spectra[Z][z1] = CXIonSpectrum_N(Z,z1, self.crosssectiondata[ihdu+2].data, \
+                  self.linedata, self.contdata,\
+                  donor = self.crosssectiondata['INDEX'].header['DONMASS'],\
+                  receivermass = self.crosssectiondata[ihdu+2].header['RECMASS'],\
+                  donormass = self.crosssectiondata['INDEX'].header['DONMASS'])
+
+              elif resolution=='NLS':
+                self.spectra[Z][z1] = CXIonSpectrum_NLS(Z,z1, self.crosssectiondata[ihdu+2].data, \
+                  self.linedata, self.contdata,\
+                  donor = self.crosssectiondata['INDEX'].header['DONMASS'],\
+                  receivermass = self.crosssectiondata[ihdu+2].header['RECMASS'],\
+                  donormass = self.crosssectiondata['INDEX'].header['DONMASS'])
+
+            # set the energy bins for the spectrum
+            self.spectra[Z][z1].set_ebins(self.ebins, ebins_checksum=self.ebins_checksum)
+
+            if DEBUG:
+              if not Z in self.emiss_debug.keys():
+                self.emiss_debug[Z] = {}
+
+#              self.emiss_debug[Z][z1] = self.spectra[Z][z1].calc_spectrum(self.ebins, self.collenergy[Z], self.collvelocity[Z], self.linedata, self.contdata, self.acxmodel)
+              self.emiss_debug[Z][z1] = self.spectra[Z][z1].calc_spectrum(self.collenergy[Z], self.collvelocity[Z])
+
+              self.emiss +=  self.emiss_debug[Z][z1] * self.abund[Z] * ionf
+
+            else:
+
+              self.emiss += self.spectra[Z][z1].calc_spectrum(self.collenergy[Z], self.collvelocity[Z]) *\
+                     self.abund[Z] * ionf
+
+
+    return self.emiss
+
+
+  def calc_ionfrac_equilibrium(self):
+    """
+    Recalculate the ionization balance based on equilibrium electron temperature
+
+    PARAMETERS
+    ----------
+    None
+
+    RETURNS
+    -------
+    None
+
+    NOTES
+    -----
+    Uses self.temperature (in keV) to set self.ionfrac
+    """
+
+    for Z in self.elements:
+#        if not Z in self.ionfrac.keys():
+          self.ionfrac[Z] = pyatomdb.atomdb.apec.solve_ionbal_eigen(Z, self.temperature,\
+                                                                   teunit='kev', datacache=self.datacache)
+    self.ionfrac_from_temperature = True
+
+
+  def set_temperature(self, temperature):
+    """
+    Recalculate the ionization balance based on equilibrium electron temperature
+
+    PARAMETERS
+    ----------
+    temperature: float
+      electron temperature in keV
+
+    RETURNS
+    -------
+    None
+
+    """
+
+    # set the numbersset_collisionparam
+    self.ionfrac_from_temperature = True
+    self.temperature = temperature
+
+    # calculate ionization balance
+    self.calc_ionfrac_equilibrium()
+
+  def set_ionfrac(self, ionfrac):
+    """
+    Recalculate the ionization balance based on equilibrium electron temperature
+
+    PARAMETERS
+    ----------
+    ionfrac: dict of arrays
+      ionization fraction, e.g. ionfrac[8]=numpy.array([0.0, 0.0, 0.0, 0.0, 0.1, 0.3, 0.4, 0.2, 0.0])
+
+    RETURNS
+    -------
+    None
+
+    """
+
+    # set the numbersset_collisionparam
+    self.ionfrac_from_temperature = False
+    self.temperature = False
+
+    # calculate ionization balance
+    self.ionfrac = ionfrac
+
+
+  def set_acxmodel(self, acxmodel):
+    """
+    Set the ACX spectrum type
+
+    PARAMETERS
+    ----------
+    acxmodel : int
+      The acxmodel (between 1 and 8)
+
+    """
+    self.acxmodel=acxmodel
+
+    for Z in self.spectra.keys():
+      for z1 in self.spectra[Z].keys():
+        self.spectra[Z][z1].set_acxmodel(self.acxmodel)
+
+
+  def set_recombtype(self, recombtype):
+    """
+    Set the recombination type
+
+    PARAMETERS
+    ----------
+    recombtype : int
+      The type of recombination (1=single, 2=all the way to neutral)
+
+    """
+    self.recombtype = recombtype
+
+  def set_abund(self, abund, elements=None):
+    """
+    Set the elemental abundance, also in each donor model
+
+    PARAMETERS
+    ----------
+    abund : array(float)
+      Abundances, relative to defulat
+
+    RETURNS
+    -------
+    None
+    """
+
+    try:
+      if elements==None:
+        elements = self.elements
+      else:
+        elements, elissvec = pyatomdb.util.make_vec(elements)
+    except ValueError:
+      elements, elissvec = pyatomdb.util.make_vec(elements)
+
+    abundvec, aisvec = pyatomdb.util.make_vec(abund)
+
+    if len(abundvec) != len(elements):
+      if len(abundvec)==1:
+        abundvec = abundvec[0]*numpy.ones(len(elements))
+
+      else:
+        raise(ValueError,"Error: specified incompatible number of elements from set_abund")
+        return
+
+    for i in range(len(abundvec)):
+      self.abund[elements[i]] = abundvec[i]
+
+
+
+
 
 
 #### LEGACY CODE BEYOND THIS POINT
