@@ -33,7 +33,7 @@ except ImportError:
 import numpy, os, hashlib, pickle
 # other pyatomdb modules
 from . import atomic, util, const, atomdb, apec
-from scipy.stats import norm
+
 import time
 import warnings
 
@@ -1570,11 +1570,11 @@ class _Gaussian_CDF():
 
 
   """
-
-
   def __init__(self):
+    from scipy.stats import norm
     self.x = numpy.linspace(-6,6,2400)
     self.cdf = norm.cdf(self.x)
+    self.broadentype='Gaussian'
 
   def broaden(self, centroid, width, ebins):
     """
@@ -1603,6 +1603,157 @@ class _Gaussian_CDF():
 
     return ret
 
+
+class _Lorentzian_CDF():
+  """
+  For fast interpolation, pre-calculate the CDF and interpolate it when
+  broadening lines
+
+  Parameters
+  ----------
+  None
+
+  Examples
+  --------
+
+  Create a CDF instance:
+
+  >>> s=_Gaussian_CDF()
+
+  Broaden a line on ebins grid, with centroid and width.
+
+  >>> cdf = a.broaden(centroid, width, ebins)
+
+  Convert to flux in each bin
+
+  >>> flux= cdf[1:]-cdf[:-1]
+
+
+  """
+
+
+
+  def __init__(self):
+    from scipy.stats import cauchy
+    self.x = numpy.linspace(-12,12,4800)
+    self.cdf = cauchy.cdf(self.x)
+    self.broadentype='Lorentzian'
+
+  def broaden(self, centroid, width, ebins):
+    """
+    Broaden a line, return CDF
+
+    Parameters
+    ----------
+    centroid : float
+      The line energy (keV)
+    width : float
+      The sigma of the normal distribution, in keV
+    ebins : array(float)
+      Energy grid to return CDF on
+
+    Returns
+    -------
+    CDF : array(float)
+      cumulative flux distribution of linen at each bin edge.
+    """
+
+    # move the energy grid
+    etmp = (ebins-centroid)/width
+
+    # interpolate to get the appropriate CDF values
+    ret=numpy.interp(etmp, self.x, self.cdf)
+
+    return ret
+
+
+
+class _Voigt_CDF():
+  """
+  For fast interpolation, pre-calculate the CDF and interpolate it when
+  broadening lines
+
+  Parameters
+  ----------
+  None
+
+  Examples
+  --------
+
+  Create a CDF instance:
+
+  >>> s=_Gaussian_CDF()
+
+  Broaden a line on ebins grid, with centroid and width.
+
+  >>> cdf = a.broaden(centroid, width, ebins)
+
+  Convert to flux in each bin
+
+  >>> flux= cdf[1:]-cdf[:-1]
+
+
+  """
+
+
+
+  def __init__(self, sigma, gamma):
+    from scipy.special import voigt_profile
+    self.x = numpy.linspace(-12,12,2400)
+    self.broadentype='Voigt'
+
+
+
+  def __recalc(self, sigma, gamma):
+
+    if ((self.sigma==sigma) & \
+        (self.gamma == gamma)): pass
+
+
+
+    edges = (self.x[1:]+self.x[:-1])/2
+    edges = numpy.append( edges[0]-(edges[1]-edges[0]), \
+                          edges, \
+                          edges[-1] + (edges[-1]-edges[-2]))
+
+
+    dx = edges[1:]-edges[:-1]
+
+    pdfmid =  voigt_profile(self.x, sigma, gamma)*dx
+
+    self.cdf = numpy.cumsum(pdfmid)
+
+
+  def broaden(self, centroid, ebins, sigma, gamma, test_recalc=False):
+    """
+    Broaden a line, return CDF
+
+    Parameters
+    ----------
+    centroid : float
+      The line energy (keV)
+    width : float
+      The sigma of the normal distribution, in keV
+    ebins : array(float)
+      Energy grid to return CDF on
+
+    Returns
+    -------
+    CDF : array(float)
+      cumulative flux distribution of linen at each bin edge.
+    """
+
+    # move the energy grid
+    etmp = (ebins-centroid)
+
+    # If required, recalculate the parameters
+    if test_recalc:
+      self.__recalc(sigma, gamma)
+
+    # interpolate to get the appropriate CDF values
+    ret=numpy.interp(etmp, self.x, self.cdf)
+
+    return ret
 
 
 class CIESession():
@@ -1742,7 +1893,7 @@ class CIESession():
     else:
       if self.SessionType=='CIE':
         self.elements=list(range(1,const.MAXZ_CIE+1))
-      elif self.SessionType=='NEI':
+      elif self.SessionType in ['NEI','PShock']:
         self.elements=list(range(1,const.MAXZ_NEI+1))
 
 
@@ -1769,11 +1920,14 @@ class CIESession():
     self.dolines=True # Include lines in spectrum
     self.docont=True # Include continuum in spectrum
     self.dopseudo=True # Include pseudo continuum in spectrum
+    self.do_eebrems = True # Do electron-electron bremsstrahlung
 
     # no response set yet
     self.rmffile=False
     self.arffile=False
     self.raw_response=False
+
+
 
 
   def _session_initialise2(self):
@@ -2078,7 +2232,8 @@ class CIESession():
                                     elements = el_list, abundance=ab, \
                                     broaden_object = self.cdf, \
                                     log_interp=log_interp, dolines=dolines,\
-                                    dopseudo=dopseudo, docont=docont)
+                                    dopseudo=dopseudo, docont=docont, \
+                                    do_eebrems = self.do_eebrems)
     ss = self._apply_response(s)
 
     return ss
@@ -2225,6 +2380,21 @@ class CIESession():
 
     else:
       print("Unknown data type for cocofile. Please pass a string or an HDUList")
+
+  def set_eebrems(self, do_eebrems):
+    """
+    Set whether to do the electron-electron bremsstrahlung in the spectrum
+
+    Parameters
+    ----------
+
+    do_eebrems : bool
+      If True, include the electron-electron bremsstrahlung calculation
+      If False, don't (this is default, and matches XSPEC behaviour)
+    """
+    a = bool(do_eebrems)
+    self.do_eebrems = a
+
 
   def set_abund(self, elements, abund):
     """
@@ -2542,7 +2712,39 @@ class CIESession():
 
 
 
+  def adjust_line(change, Z=0, z1=0, z1_drv=0, upper=0,lower=0, quantity="Epsilon", method="Replace"):
+     """
+     Change the emissivity or wavelength of a line. Integer parameters set to 0 mean "all". Note this all
+     happens in memory and does not edit the underlying files.
 
+     Parameters
+     ----------
+     change : float or str
+       If float, set the new value to this.
+       If string
+     Z : int
+       Element
+     z1 : int
+       Ion
+     z1_drv : int
+       Driving ion
+     upper : int
+       Upper level
+     lower : int
+       Lower level
+     quantity : string
+       Change "Epsilon" or "Lambda" - emissivity or wavelength - by change
+     method : string
+       "Replace": replace existing value with change
+       "Multiply" : multiply existing value with change
+       "Divide" : divide existing value by change
+       "Add" : add change to existing value
+       "Subtract" : subtract change from existing
+
+     Returns
+     -------
+     None
+     """
 
 
 
@@ -2587,16 +2789,30 @@ class _CIESpectrum():
       The continuum emissivity data
     """
 
+    self.datacache = {}
     self.SessionType = 'CIE'
 
     picklefname = os.path.expandvars('$ATOMDB/spectra_%s_%s.pkl'%\
                                 (linedata[0].header['CHECKSUM'],\
                                  cocodata[0].header['CHECKSUM']))
+    havepicklefile = False
     if os.path.isfile(picklefname):
-      self.spectra = pickle.load(open(picklefname,'rb'))
-      self.kTlist = self.spectra['kTlist']
-    else:
-    # < insert test for existing pkl file for spectra, otherwise populate>
+      havepicklefile = True
+
+    if havepicklefile:
+      try:
+        self.spectra = pickle.load(open(picklefname,'rb'))
+        self.kTlist = self.spectra['kTlist']
+      except AttributeError:
+        havepicklefile=False
+        print("pre-stored data in %s is out of date. This can be caused by updates to the data "%(picklefname)+
+              "or, more likely, changes to pyatomdb. Regenerating...")
+
+        # delete the old file
+        if os.path.isfile(picklefname):
+          os.remove(picklefname)
+
+    if not havepicklefile:
       self.spectra={}
       self.kTlist = numpy.array(linedata[1].data['kT'].data)
       self.spectra['kTlist']=numpy.array(linedata[1].data['kT'].data)
@@ -2701,7 +2917,8 @@ class _CIESpectrum():
   def return_spectrum(self, Te, teunit='keV', nearest = False,\
                              elements=False, abundance=False, log_interp=True,\
                              broaden_object=False,\
-                             dolines=True, docont=True, dopseudo=True):
+                             dolines=True, docont=True, dopseudo=True, \
+                             do_eebrems = False):
 
     """
     Return the spectrum of the element on the energy bins in
@@ -2732,6 +2949,8 @@ class _CIESpectrum():
       Calculate Continuum emission (default True)
     dopseudo : bool
       Calculate PseudoContinuum (weak line) emission (default True)
+    do_eebrems : bool
+      Calculate electron-electron bremsstrahlung emission (default False)
 
     Returns
     -------
@@ -2756,6 +2975,11 @@ class _CIESpectrum():
 
     s = 0.0
 
+    # electron-electron bremsstrahlung electron counter
+    if do_eebrems:
+      nel=0.0
+      rawabund = atomdb.get_abundance(datacache=self.datacache)
+
     for Z in elements:
       abund = abundance[Z]
       if abund > 0:
@@ -2765,7 +2989,7 @@ class _CIESpectrum():
         sss=0.0
 
         if len(ikT) == 1:
-          ss = self.spectra[ikT[i]][Z].return_spectrum(self.ebins,\
+          ss = self.spectra[ikT[0]][Z].return_spectrum(self.ebins,\
                                   kT,\
                                   ebins_checksum = self.ebins_checksum,\
                                   thermal_broadening = self.thermal_broadening,\
@@ -2790,7 +3014,7 @@ class _CIESpectrum():
                                   dopseudo=dopseudo) *\
                                   abund
 
-          ss2 = self.spectra[ikT[0]][Z].return_spectrum(self.ebins,\
+          ss2 = self.spectra[ikT[1]][Z].return_spectrum(self.ebins,\
                                   kT,\
                                   ebins_checksum = self.ebins_checksum,\
                                   thermal_broadening = self.thermal_broadening,\
@@ -2805,6 +3029,17 @@ class _CIESpectrum():
           ss = self._merge_spectra_temperatures(f,ss1,ss2,log_interp)
 
         s+=ss
+        if do_eebrems:
+          ionpop=apec.return_ionbal(Z, kT, datacache=self.datacache, teunit='keV')
+          Zabundance = rawabund[Z]*abund
+
+          tmp = sum(ionpop*numpy.arange(Z+1))*Zabundance
+          nel +=tmp
+
+    if do_eebrems:
+      eespec = calc_ee_brems_spec(self.ebins, kT, nel)
+      s+= eespec
+
     return s
 
 
@@ -3257,7 +3492,7 @@ class _ElementSpectrum():
 
     self.ebins_checksum = ebins_checksum
     self.T = T
-    spec = 0.0
+    spec = numpy.zeros(len(eedges)-1)
 
     if dolines:
       spec+=self.lines.return_spec(eedges, T, ebins_checksum=ebins_checksum,\
@@ -4047,7 +4282,9 @@ class NEISession(CIESession):
                                     abundance=ab, log_interp=True,\
                                     broaden_object=self.cdf, \
                                     freeze_ion_pop = freeze_ion_pop, dolines=dolines,\
-                                    dopseudo=dopseudo, docont=docont)
+                                    dopseudo=dopseudo, docont=docont,\
+                                    do_eebrems=self.do_eebrems)
+>>>>>>> master
 
     ss = self._apply_response(s)
 
@@ -4101,11 +4338,24 @@ class _NEISpectrum(_CIESpectrum):
                                 (linedata[0].header['CHECKSUM'],\
                                  cocodata[0].header['CHECKSUM']))
 
-
+    havepicklefile = False
     if os.path.isfile(picklefname):
-      self.spectra = pickle.load(open(picklefname,'rb'))
-      self.kTlist = self.spectra['kTlist']
-    else:
+      havepicklefile = True
+
+    if havepicklefile:
+      try:
+        self.spectra = pickle.load(open(picklefname,'rb'))
+        self.kTlist = self.spectra['kTlist']
+      except AttributeError:
+        havepicklefile=False
+        print("pre-stored data in %s is out of date. This can be caused by updates to the data "%(picklefname)+
+              "or, more likely, changes to pyatomdb. Regenerating...")
+
+        # delete the old file
+        if os.path.isfile(picklefname):
+          os.remove(picklefname)
+
+    if not havepicklefile:
       self.spectra={}
       self.kTlist = numpy.array(linedata[1].data['kT'].data)
       self.spectra['kTlist'] = numpy.array(linedata[1].data['kT'].data)
@@ -4221,7 +4471,7 @@ class _NEISpectrum(_CIESpectrum):
   def return_spectrum(self, Te, tau, init_pop='ionizing', teunit='keV', nearest = False,
                              elements=False, abundance=False, log_interp=True, broaden_object=False,\
                              freeze_ion_pop = False,\
-                             dolines=True, docont=True, dopseudo=True):
+                             dolines=True, docont=True, dopseudo=True, do_eebrems = False):
 
     """
     Return the spectrum of the element on the energy bins in
@@ -4261,6 +4511,8 @@ class _NEISpectrum(_CIESpectrum):
       Calculate Continuum emission (default True)
     dopseudo : bool
       Calculate PseudoContinuum (weak line) emission (default True)
+    do_eebrems : bool
+      Calculate electron-electron bremsstrahlung emission (default False)
     Returns
     -------
     spec : array(float)
@@ -4344,6 +4596,15 @@ class _NEISpectrum(_CIESpectrum):
     else:
       totspec = spec[0]
 
+    if do_eebrems:
+      nel = 0.0
+      rawabund = atomdb.get_abundance(datacache=self.datacache)
+      for Z in ionfrac_all.keys():
+        if abundance[Z] > 0.0:
+          nel += sum(ionfrac_all[Z]*numpy.arange(Z+1))*rawabund[Z]*abundance[Z]
+
+      eespec = calc_ee_brems_spec(self.ebins, kT, nel)
+      totspec += eespec
     return totspec
 
 
@@ -4880,7 +5141,8 @@ class PShockSession(NEISession):
                                     teunit=teunit, \
                                     nearest = nearest,elements = el_list, \
                                     abundance=ab, log_interp=True,\
-                                    broaden_object=self.cdf)
+                                    broaden_object=self.cdf,\
+                                    do_eebrems=self.do_eebrems)
 
     ss = self._apply_response(s)
 
@@ -5051,10 +5313,24 @@ class _PShockSpectrum(_NEISpectrum):
                                  cocodata[0].header['CHECKSUM']))
 
 
+    havepicklefile = False
     if os.path.isfile(picklefname):
-      self.spectra = pickle.load(open(picklefname,'rb'))
-      self.kTlist = self.spectra['kTlist']
-    else:
+      havepicklefile = True
+
+    if havepicklefile:
+      try:
+        self.spectra = pickle.load(open(picklefname,'rb'))
+        self.kTlist = self.spectra['kTlist']
+      except AttributeError:
+        havepicklefile=False
+        print("pre-stored data in %s is out of date. This can be caused by updates to the data "%(picklefname)+
+              "or, more likely, changes to pyatomdb. Regenerating...")
+
+        # delete the old file
+        if os.path.isfile(picklefname):
+          os.remove(picklefname)
+
+    if not havepicklefile:
       self.spectra={}
       self.kTlist = numpy.array(linedata[1].data['kT'].data)
       self.spectra['kTlist'] = numpy.array(linedata[1].data['kT'].data)
@@ -5205,7 +5481,7 @@ class _PShockSpectrum(_NEISpectrum):
 
   def return_spectrum(self, Te, tau_u, tau_l=0.0, init_pop='ionizing', teunit='keV', nearest = False,
                              elements=False, abundance=False, log_interp=True, broaden_object=False,\
-                             freeze_ion_pop=False):
+                             freeze_ion_pop=False, do_eebrems = False):
 
     """
     Return the spectrum of the element on the energy bins in
@@ -5241,6 +5517,8 @@ class _PShockSpectrum(_NEISpectrum):
       Object with routine "broaden" which applies line broadening. Usually a Gaussian.
     freeze_ion_pop : bool
       If True, skip the ion population calculation, use init_pop as the final pop instead.
+    do_eebrems : bool
+      Calculate electron-electron bremsstrahlung emission (default False)
 
     Returns
     -------
@@ -5323,6 +5601,17 @@ class _PShockSpectrum(_NEISpectrum):
 
         # add the element's spectrum to the whole, including abundance
         totspec += elspec* abund
+
+
+    if do_eebrems:
+      nel = 0.0
+      rawabund = atomdb.get_abundance(datacache=self.datacache)
+      for Z in ionfrac_all.keys():
+        if abundance[Z] > 0.0:
+          nel += sum(ionfrac_all[Z]*numpy.arange(Z+1))*rawabund[Z]*abundance[Z]
+
+      eespec = calc_ee_brems_spec(self.ebins, kT, nel)
+      totspec += eespec
 
     return totspec
 
@@ -5595,6 +5884,41 @@ class _PShockSpectrum(_NEISpectrum):
           linelist = numpy.append(linelist, linelisttmp)
 
     return linelist
+
+def calc_ee_brems_spec(ebins, Te, dens, teunit='keV'):
+  """
+  Calculate the electron-electron bremstrahlung per-bin emissivity
+
+  Parameters
+  ----------
+  ebins : array(float)
+    The spectral bin edges in energy order (keV)
+  Te : float
+    Electron temperature (default, keV)
+  dens : float
+    The electron density (cm^-3)
+  teunit : string
+    Units of Te (keV by default, K also allowed)
+
+  Returns
+  -------
+  eebrems : array(float)
+    electron-electron bremsstrahlung in ph cm^3 s^-1 bin^-1
+
+  """
+
+  # convert temperature to keV if required
+  kT = util.convert_temp(Te, teunit, 'keV')
+
+  # get the emission at each bin edge
+  eespec = apec.calc_ee_brems(ebins, kT, dens)
+
+  # average over bin width & centroid
+  #eecent = (eespec[1:]+eespec[:-1])/2
+  #binwidth = ebins[1:]-ebins[:-1]
+  ee = (ebins[1:]-ebins[:-1]) * (eespec[1:]+eespec[:-1])/2
+
+  return ee
 
 
 
@@ -6786,7 +7110,7 @@ def __get_nei_line_emissivity(Z, z1, up, lo):
   -------
   emiss : dict
     a dictionary containing an array, one for each ion_drv, with the emissivity in it.
-    E.g. emiss[6] is a 51 element array, with the emissivity due to z1=6 as a fn of temperature
+    E.g. emiss[6] is an nTe element array, with the emissivity due to z1=6 as a fn of temperature
     Also emiss['Te'] is the tempearture in keV
   """
   warnings.warn("get_nei_line_emissivity is a deprecated function and will be removed. Use NEISession.return_line_emissivity instead", DeprecationWarning, stacklevel=3)

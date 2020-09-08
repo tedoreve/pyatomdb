@@ -166,3 +166,12 @@ May 12th 2020: Minor packaging fixes
 
 0.10.2
 May 27th 2020: Bugfix to read_data
+
+0.10.3
+July 14th 2020: Added force keyword to switch_version. Amended make_linelist to handle non-51 temperature files
+
+0.10.4
+July 20th 2020: Fixed PShockSession initialization error. Added automatic removal of old pickle files generated from fits files when detected.
+
+0.10.5
+September 4th 2020: Fixed issue when handling temperatures above or below the maximum and minimum values in the APEC emissivity files. Added Electron-electron bremsstrahlung emission into APEC model.

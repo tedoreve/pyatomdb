@@ -1020,7 +1020,7 @@ def calc_ee_brems(E, T, N):
       GII[k,] = GpwII[k,]*FCCII[k,]
     ret = 1.455e-16*N**2*numpy.exp(-x)/(x*numpy.sqrt(taoII))*GII
   elif 300.<=T<7000.:
-    taoIII = taoII
+    taoIII = tao
     for k in range(numx):
       GpwIII[k,] = numpy.sum(aIII*taoIII**(aIIj/8.)*x[k,]**(aIIi))-\
                    numpy.exp(x[k,])*(-1.0)*Ei0[k,]*\
@@ -3294,7 +3294,9 @@ def calc_recomb_popn(levpop, Z, z1, z1_drv,T, dens, drlevrates, rrlevrates,\
                  do_la=True, do_ai=False, do_ec=False, do_pc=False,\
                  do_ir=False)
 
-    datacache={}
+    #datacache={}
+
+
     for i in range(len(matrixA_in['init'])):
       matrixA[matrixA_in['final'][i], matrixA_in['init'][i]]+=matrixA_in['rate'][i]
 
@@ -3680,7 +3682,7 @@ def run_apec_ion(settings, te, dens, Z, z1, ionfrac, abund):
 
   # set up the datacache
 
-  datacache = {}
+  #datacache = {}
 
   # Find the number of levels
   lvdat = atomdb.get_data(Z,z1,'LV', datacache=datacache, settings=settings)
@@ -3701,7 +3703,7 @@ def run_apec_ion(settings, te, dens, Z, z1, ionfrac, abund):
       up, lo, rates = gather_rates(Z, z1, te, dens, datacache=datacache, settings=settings)
       print("finished calling gather_rates from run_apec_ion")
       # purge the datacache here, as this often requires heavy memory use
-      datacache={}
+#      datacache={}
       # solve everything
       print("calling solve_level_pop from run_apec_ion")
       lev_pop = solve_level_pop(up,lo,rates, settings)
@@ -3752,7 +3754,7 @@ def run_apec_ion(settings, te, dens, Z, z1, ionfrac, abund):
     continuum['brems']=numpy.zeros(len(ebins)-1, dtype=float)
 
   # now look at the neighbouring ions
-  datacache={}
+  #datacache={}
 #  z1_drv=z1*1
   if z1_drv>1:
 
@@ -3818,7 +3820,7 @@ def run_apec_ion(settings, te, dens, Z, z1, ionfrac, abund):
   # now do the ionizing cases
   linelist_ion = numpy.zeros(0,dtype= generate_datatypes('linetype'))
   if z1_drv < Z:
-    datacache={}
+    #datacache={}
     z1=z1_drv+1
     lev_pop_parent = lev_pop*1.0
 
@@ -4751,9 +4753,13 @@ def _solve_ionbal_eigen(Z, Te, init_pop=False, tau=False, \
 
   kT = util.convert_temp(Te, teunit, 'keV')
 
-  if tau==False:
-    cie = True
-    init_pop_calc=False
+  if type(tau)==bool:
+    if tau==False:
+      cie = True
+      init_pop_calc=False
+
+    else:
+      raise ValueError("Error: tau should be False, a float, or an array of floats. Received "+repr(Tau))
   else:
     cie = False
 
