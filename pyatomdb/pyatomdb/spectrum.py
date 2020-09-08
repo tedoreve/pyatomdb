@@ -2712,31 +2712,28 @@ class CIESession():
 
 
 
-  def adjust_line(change, Z=0, z1=0, z1_drv=0, upper=0,lower=0, quantity="Epsilon", method="Replace"):
+  def adjust_line(self, change, Z=0, z1=0,  upper=0,lower=0, quantity="Lambda", method="Replace"):
      """
      Change the emissivity or wavelength of a line. Integer parameters set to 0 mean "all". Note this all
      happens in memory and does not edit the underlying files.
 
      Parameters
      ----------
-     change : float or str
-       If float, set the new value to this.
-       If string
+     change : float
+       New value, or factor to apply to old value, depending on method
      Z : int
        Element
      z1 : int
        Ion
-     z1_drv : int
-       Driving ion
      upper : int
        Upper level
      lower : int
        Lower level
      quantity : string
-       Change "Epsilon" or "Lambda" - emissivity or wavelength - by change
+       Change "Epsilon" or "Lambda" - emissivity or wavelength
      method : string
        "Replace": replace existing value with change
-       "Multiply" : multiply existing value with change
+       "Multiply" : multiply existing value by change
        "Divide" : divide existing value by change
        "Add" : add change to existing value
        "Subtract" : subtract change from existing
@@ -2746,6 +2743,65 @@ class CIESession():
      None
      """
 
+     # go through opened spectra and amend
+
+     if Z==0:
+       Zlist = self.elements
+     else:
+       Zlist = [Z]
+
+     for zZ in Zlist:
+
+       for ikT in range(len(self.spectra.kTlist)):
+
+         ldat = self.spectra.spectra[ikT][zZ].lines
+         lbool = numpy.ones(len(ldat.lines), dtype=bool)
+         if z1 != 0:
+           lbool = lbool & (ldat.lines['Ion']==z1)
+
+         if upper != 0:
+           lbool = lbool & (ldat.lines['UpperLev']==upper)
+
+         if lower != 0:
+           lbool = lbool & (ldat.lines['LowerLev']==lower)
+
+         # make adjustments if required
+
+         lboollist = numpy.where(lbool==True)[0]
+         for lbool in lboollist:
+           if quantity.lower() == 'lambda':
+             if method.lower()=='replace':
+              ldat.lines[lbool]['Lambda'] = change*1.0
+              print(self.spectra.spectra[ikT][zZ].lines.lines[lbool]['Lambda'])
+             elif method.lower()=='multiply':
+              ldat.lines[lbool]['Lambda'] *= change*1
+             elif method.lower()=='divide':
+              ldat.lines[lbool]['Lambda'] /= change
+             elif method.lower()=='add':
+              ldat.lines[lbool]['Lambda'] += change
+             elif method.lower()=='subtract':
+              ldat.lines[lbool]['Lambda'] -= change
+             else:
+               raise util.OptionError('Error: method must be Replace, Multiply, Divide, Add or Subtract. Currently is %s'%(method))
+
+             ldat.lineenergies[lbool] = const.HC_IN_KEV_A/ldat.lines[lbool]['Lambda']
+
+           if quantity.lower() == 'epsilon':
+             if method.lower()=='replace':
+              ldat.lines[lbool]['Epsilon'] = change
+             elif method.lower()=='multiply':
+              ldat.lines[lbool]['Epsilon'] *= change
+             elif method.lower()=='divide':
+              ldat.lines[lbool]['Epsilon'] /= change
+             elif method.lower()=='add':
+              ldat.lines[lbool]['Epsilon'] += change
+             elif method.lower()=='subtract':
+              ldat.lines[lbool]['Epsilon'] -= change
+             else:
+               raise util.OptionError('Error: method must be Replace, Multiply, Divide, Add or Subtract. Currently is %s'%(method))
+
+     print("Amendment made: Z=%i, z1=%i, upper=%i, lower=%i, quantity=%s, change=%f, method=%s"%\
+           (Z, z1, upper, lower, quantity, change, method))
 
 
 
@@ -4284,13 +4340,113 @@ class NEISession(CIESession):
                                     freeze_ion_pop = freeze_ion_pop, dolines=dolines,\
                                     dopseudo=dopseudo, docont=docont,\
                                     do_eebrems=self.do_eebrems)
->>>>>>> master
+
 
     ss = self._apply_response(s)
 
     return ss
 
 
+
+  def adjust_line(self, change, Z=0, z1=0, z1_drv=0, upper=0,lower=0, quantity="Lambda", method="Replace"):
+     """
+     Change the emissivity or wavelength of a line. Integer parameters set to 0 mean "all". Note this all
+     happens in memory and does not edit the underlying files.
+
+     Parameters
+     ----------
+     change : float
+       New value, or factor to apply to old value, depending on method
+     Z : int
+       Element
+     z1 : int
+       Ion
+     z1_drv : int
+       Driving ion
+     upper : int
+       Upper level
+     lower : int
+       Lower level
+     quantity : string
+       Change "Epsilon" or "Lambda" - emissivity or wavelength
+     method : string
+       "Replace": replace existing value with change
+       "Multiply" : multiply existing value by change
+       "Divide" : divide existing value by change
+       "Add" : add change to existing value
+       "Subtract" : subtract change from existing
+
+     Returns
+     -------
+     None
+     """
+
+     # go through opened spectra and amend
+
+     if Z==0:
+       Zlist = self.elements
+     else:
+       Zlist = [Z]
+
+     for zZ in Zlist:
+
+       if z1_drv == 0:
+         z1_drv_list = range(1,zZ+2)
+       else:
+         z1_drv_list = [z1_drv]
+
+       for zz1_drv in z1_drv_list:
+
+         for ikT in range(len(self.spectra.kTlist)):
+
+           ldat = self.spectra.spectra[ikT][zZ][zz1_drv].lines
+           lbool = numpy.ones(len(ldat.lines), dtype=bool)
+           if z1 != 0:
+             lbool = lbool & (ldat.lines['Ion']==z1)
+
+           if upper != 0:
+             lbool = lbool & (ldat.lines['UpperLev']==upper)
+
+           if lower != 0:
+             lbool = lbool & (ldat.lines['LowerLev']==lower)
+
+           # make adjustments if required
+
+           lboollist = numpy.where(lbool==True)[0]
+           for lbool in lboollist:
+             if quantity.lower() == 'lambda':
+               if method.lower()=='replace':
+                ldat.lines[lbool]['Lambda'] = change*1.0
+                print(self.spectra.spectra[ikT][zZ].lines.lines[lbool]['Lambda'])
+               elif method.lower()=='multiply':
+                ldat.lines[lbool]['Lambda'] *= change*1
+               elif method.lower()=='divide':
+                ldat.lines[lbool]['Lambda'] /= change
+               elif method.lower()=='add':
+                ldat.lines[lbool]['Lambda'] += change
+               elif method.lower()=='subtract':
+                ldat.lines[lbool]['Lambda'] -= change
+               else:
+                 raise util.OptionError('Error: method must be Replace, Multiply, Divide, Add or Subtract. Currently is %s'%(method))
+
+               ldat.lineenergies[lbool] = const.HC_IN_KEV_A/ldat.lines[lbool]['Lambda']
+
+             if quantity.lower() == 'epsilon':
+               if method.lower()=='replace':
+                ldat.lines[lbool]['Epsilon'] = change
+               elif method.lower()=='multiply':
+                ldat.lines[lbool]['Epsilon'] *= change
+               elif method.lower()=='divide':
+                ldat.lines[lbool]['Epsilon'] /= change
+               elif method.lower()=='add':
+                ldat.lines[lbool]['Epsilon'] += change
+               elif method.lower()=='subtract':
+                ldat.lines[lbool]['Epsilon'] -= change
+               else:
+                 raise util.OptionError('Error: method must be Replace, Multiply, Divide, Add or Subtract. Currently is %s'%(method))
+
+     print("Amendment made: Z=%i, z1=%i, z1_drv=%i, upper=%i, lower=%i, quantity=%s, change=%f, method=%s"%\
+           (Z, z1, z1_drv, upper, lower, quantity, change, method))
 
 class _NEISpectrum(_CIESpectrum):
   """
@@ -6541,7 +6697,7 @@ class ACXDonorModel():
                abundset='AG89',\
                elements=list(range(1,31)),\
                acxmodel = 8, \
-               recombtype = SINGLE_RECOMBINATION,\
+               recombtype = const.SINGLE_RECOMBINATION,\
                collisiontype = 1):
 
 
