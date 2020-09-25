@@ -1,7 +1,0 @@
-numpydoc
-astropy
-wget
-sphinx
-scipy
-requests
-joblib

@@ -54,7 +54,7 @@ class TestSpectrumCIESession(unittest.TestCase):
       # now test spectrum calculation
 
       # load the correct result
-      testdat = pyatomdb.numpy.load("tests/testdata/test_set_response_spec1_%s.npy"%(ATOMDBVERSION))
+      testdat = pyatomdb.numpy.load("./testdata/test_set_response_spec1_%s.npy"%(ATOMDBVERSION))
 
       t = self.s.return_spectrum(1.0)
       pyatomdb.numpy.testing.assert_allclose(t, testdat)
@@ -63,11 +63,11 @@ class TestSpectrumCIESession(unittest.TestCase):
     def test_set_response(self):
       """ Testing real responses and spectral broadening"""
       # test with real response
-      self.s.set_response('tests/testdata/aciss_heg1_cy19.grmf',\
-                          arf='tests/testdata/aciss_heg1_cy19.garf')
+      self.s.set_response('./testdata/aciss_heg1_cy19.grmf',\
+                          arf='./testdata/aciss_heg1_cy19.garf')
 
       # load the correct result
-      testdat = pyatomdb.numpy.load("tests/testdata/test_set_response_spec2_%s.npz"%(ATOMDBVERSION))
+      testdat = pyatomdb.numpy.load("./testdata/test_set_response_spec2_%s.npz"%(ATOMDBVERSION))
 
       # calc spectrum
       t = self.s.return_spectrum(1.0)
@@ -82,11 +82,11 @@ class TestSpectrumCIESession(unittest.TestCase):
     def test_nearest_spectrum(self):
       """ Testing real responses with the nearest spectrum"""
       # test with real response
-      self.s.set_response('tests/testdata/aciss_heg1_cy19.grmf',\
-                          arf='tests/testdata/aciss_heg1_cy19.garf')
+      self.s.set_response('./testdata/aciss_heg1_cy19.grmf',\
+                          arf='./testdata/aciss_heg1_cy19.garf')
 
       # load the correct result
-      testdat = pyatomdb.numpy.load("tests/testdata/test_set_response_spec2_%s.npz"%(ATOMDBVERSION))
+      testdat = pyatomdb.numpy.load("./testdata/test_set_response_spec2_%s.npz"%(ATOMDBVERSION))
 
       # calc spectrum
       t = self.s.return_spectrum(1.0)

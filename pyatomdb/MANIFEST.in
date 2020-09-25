@@ -1,5 +1,0 @@
-include COPYING.txt
-recursive-include docs *
-recursive-include examples *
-recursive-include wrappers *
-prune docs/_*
